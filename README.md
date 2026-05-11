@@ -19,6 +19,9 @@ Connects via **stdio**. Works with any GitHub repo your token can reach — set 
 - `add_pr_comment(number, body)` — top-level comment.
 - `add_pr_review_comment(number, path, line, body, side?)` — inline diff comment.
 
+**Introspection**
+- `tail_audit_log(n?)` — return the last N entries of this server's audit log. Lets the model show you what it has been doing without leaving chat.
+
 All tools accept optional `owner` and `repo` to override env defaults.
 
 ## Setup
@@ -52,7 +55,7 @@ Or add manually to `~/.claude.json` (user-scope) or a project's `.mcp.json`:
 
 The server reads env from a `.env` file next to `server.ts`, so credentials don't need to live in the MCP config. (You can override with the config's `env` block if preferred.)
 
-Restart Claude Code. Run `/mcp`. You should see `github-pr-review · ✓ connected · 9 tools`.
+Restart Claude Code. Run `/mcp`. You should see `github-pr-review · ✓ connected · 10 tools`.
 
 Verify the registration captured the server path:
 

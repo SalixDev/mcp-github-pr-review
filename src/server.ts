@@ -1,5 +1,5 @@
 import { config as loadEnv } from "dotenv";
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
@@ -174,6 +174,10 @@ const GetCommitArgs = RepoArgs.extend({
   sha: z.string().min(1),
 });
 
+const TailAuditLogArgs = z.object({
+  n: z.number().int().min(1).max(100).default(20),
+});
+
 const ListMyReposArgs = z.object({
   visibility: z.enum(["all", "public", "private"]).default("all"),
   affiliation: z.string().default("owner,collaborator,organization_member"),
@@ -305,6 +309,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             default: "pushed",
           },
           per_page: { type: "number", default: 30 },
+        },
+      },
+    },
+    {
+      name: "tail_audit_log",
+      description:
+        "Return the last N entries from this MCP server's append-only audit log. Each entry records a single prior tool call (timestamp, tool name, owner/repo, ok/error, key args). Use to introspect what this server has done recently — does not call GitHub.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          n: { type: "number", default: 20, description: "Entries to return (1-100)." },
         },
       },
     },
@@ -482,6 +497,31 @@ async function dispatch(name: string, rawArgs: unknown) {
       return { content: [{ type: "text", text: JSON.stringify(slim, null, 2) }] };
     }
 
+    if (name === "tail_audit_log") {
+      const args = TailAuditLogArgs.parse(rawArgs ?? {});
+      let raw: string;
+      try {
+        raw = await readFile(AUDIT_PATH, "utf-8");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ entries: [], note: "audit log not yet created — no tool calls recorded" }, null, 2) }],
+          };
+        }
+        throw err;
+      }
+      const lines = raw.split("\n").filter((l) => l.length > 0);
+      const slice = lines.slice(-args.n);
+      const entries = slice.map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return { malformed: true, raw: l };
+        }
+      });
+      return { content: [{ type: "text", text: JSON.stringify(entries, null, 2) }] };
+    }
+
     if (name === "list_my_repos") {
       const args = ListMyReposArgs.parse(rawArgs ?? {});
       const { data } = await octokit.repos.listForAuthenticatedUser({
@@ -542,15 +582,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     error = sanitizeError(err instanceof Error ? err.message : String(err));
     return { isError: true, content: [{ type: "text", text: `error: ${error}` }] };
   } finally {
-    void audit({
-      ts: new Date().toISOString(),
-      tool: name,
-      owner: auditOwner,
-      repo: auditRepo,
-      ok,
-      error,
-      extra: Object.keys(extra).length > 0 ? extra : undefined,
-    });
+    // Skip auditing tail_audit_log itself — reading the log shouldn't add noise to it.
+    if (name !== "tail_audit_log") {
+      void audit({
+        ts: new Date().toISOString(),
+        tool: name,
+        owner: auditOwner,
+        repo: auditRepo,
+        ok,
+        error,
+        extra: Object.keys(extra).length > 0 ? extra : undefined,
+      });
+    }
   }
 });
 
