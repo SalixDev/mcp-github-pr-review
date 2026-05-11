@@ -32,23 +32,26 @@ All tools accept optional `owner` and `repo` to override the env defaults.
 
 ## Connect to Claude Code
 
-Add to `~/.claude.json` (user-scope) or a project's `.mcp.json`:
+Easiest — use the CLI from inside your cloned folder:
+
+```bash
+claude mcp add github-pr-review --scope user -- npx -y tsx "$(pwd)/src/server.ts"
+```
+
+Or add manually to `~/.claude.json` (user-scope) or a project's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "github-pr-review": {
       "command": "npx",
-      "args": ["-y", "tsx", "/absolute/path/to/projects/02-mcp-server/src/server.ts"],
-      "env": {
-        "GITHUB_TOKEN": "ghp_...",
-        "GITHUB_OWNER": "your-default-owner",
-        "GITHUB_REPO": "your-default-repo"
-      }
+      "args": ["-y", "tsx", "/absolute/path/to/mcp-github-pr-review/src/server.ts"]
     }
   }
 }
 ```
+
+The server reads `GITHUB_TOKEN` / `GITHUB_OWNER` / `GITHUB_REPO` from a `.env` file next to `server.ts`, so you don't need to put them in the MCP config. (You can override with the config's `env` block if preferred.)
 
 Restart Claude Code. Run `/mcp`. You should see `github-pr-review · ✓ connected · 8 tools`.
 
