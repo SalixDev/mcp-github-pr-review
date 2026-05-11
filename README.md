@@ -54,6 +54,19 @@ The server reads env from a `.env` file next to `server.ts`, so credentials don'
 
 Restart Claude Code. Run `/mcp`. You should see `github-pr-review · ✓ connected · 9 tools`.
 
+Verify the registration captured the server path:
+
+```bash
+claude mcp list | grep github-pr-review
+```
+
+The output should show the full `npx -y tsx /absolute/path/to/src/server.ts`. If you only see `npx -y tsx` with no path, a stale registration blocked the add (the `add` command exits with `already exists` instead of overwriting). Fix:
+
+```bash
+claude mcp remove github-pr-review --scope user
+claude mcp add github-pr-review --scope user -- npx -y tsx "$(pwd)/src/server.ts"
+```
+
 ## Try it
 
 ```
