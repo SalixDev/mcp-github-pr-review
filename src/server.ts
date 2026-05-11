@@ -1,4 +1,5 @@
 import { config as loadEnv } from "dotenv";
+import { appendFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
@@ -22,6 +23,37 @@ if (!TOKEN) {
 }
 
 const octokit = new Octokit({ auth: TOKEN });
+
+// ---- Audit log ------------------------------------------------------------
+// Append-only record of every tool call. One JSON object per line.
+const AUDIT_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../audit.jsonl");
+
+type AuditRecord = {
+  ts: string;
+  tool: string;
+  owner: string | null;
+  repo: string | null;
+  ok: boolean;
+  error?: string;
+  extra?: Record<string, unknown>;
+};
+
+// Strip GitHub token formats from error messages and cap length, in case an
+// upstream error echoes a misplaced credential back to us.
+function sanitizeError(msg: string): string {
+  return msg
+    .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, "[REDACTED_TOKEN]")
+    .replace(/github_pat_[A-Za-z0-9_]{20,}/g, "[REDACTED_TOKEN]")
+    .slice(0, 500);
+}
+
+async function audit(rec: AuditRecord): Promise<void> {
+  try {
+    await appendFile(AUDIT_PATH, JSON.stringify(rec) + "\n");
+  } catch (err) {
+    console.error(`[github-pr-review] audit write failed: ${(err as Error).message}`);
+  }
+}
 
 // ---- Allowlists -----------------------------------------------------------
 // Even though the token may grant access to many repos, we constrain what
@@ -270,8 +302,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 
 // Run a tool when the client calls one.
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const { name, arguments: rawArgs } = req.params;
+async function dispatch(name: string, rawArgs: unknown) {
   try {
     if (name === "list_prs") {
       const args = ListPrsArgs.parse(rawArgs ?? {});
@@ -469,11 +500,53 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const msg = err instanceof Error ? err.message : String(err);
     return { isError: true, content: [{ type: "text", text: `error: ${msg}` }] };
   }
+}
+
+server.setRequestHandler(CallToolRequestSchema, async (req) => {
+  const { name, arguments: rawArgs } = req.params;
+  // Pull audit fields from raw args BEFORE validation so we still log on
+  // malformed input. These are best-effort intent; the dispatcher may resolve
+  // different defaults internally.
+  const rawObj = (rawArgs ?? {}) as Record<string, unknown>;
+  const auditOwner =
+    (typeof rawObj.owner === "string" ? rawObj.owner : null) ?? DEFAULT_OWNER ?? null;
+  const auditRepo =
+    (typeof rawObj.repo === "string" ? rawObj.repo : null) ?? DEFAULT_REPO ?? null;
+  const extra: Record<string, unknown> = {};
+  if (typeof rawObj.number === "number") extra.number = rawObj.number;
+  if (typeof rawObj.sha === "string") extra.sha = rawObj.sha;
+  if (typeof rawObj.path === "string") extra.path = rawObj.path;
+
+  let ok = true;
+  let error: string | undefined;
+  try {
+    const result = await dispatch(name, rawArgs);
+    if (result.isError) {
+      ok = false;
+      const firstBlock = result.content?.[0] as { text?: string } | undefined;
+      error = sanitizeError(firstBlock?.text ?? "tool error");
+    }
+    return result;
+  } catch (err) {
+    ok = false;
+    error = sanitizeError(err instanceof Error ? err.message : String(err));
+    return { isError: true, content: [{ type: "text", text: `error: ${error}` }] };
+  } finally {
+    void audit({
+      ts: new Date().toISOString(),
+      tool: name,
+      owner: auditOwner,
+      repo: auditRepo,
+      ok,
+      error,
+      extra: Object.keys(extra).length > 0 ? extra : undefined,
+    });
+  }
 });
 
 // ---- Wire up stdio transport ---------------------------------------------
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(
-  `[github-pr-review] connected. default=${DEFAULT_OWNER ?? "(none)"}/${DEFAULT_REPO ?? "(none)"} read=[${[...READ_ALLOW].join(",")}] write=[${[...WRITE_ALLOW].join(",")}]`,
+  `[github-pr-review] connected. default=${DEFAULT_OWNER ?? "(none)"}/${DEFAULT_REPO ?? "(none)"} read=[${[...READ_ALLOW].join(",")}] write=[${[...WRITE_ALLOW].join(",")}] audit=${AUDIT_PATH}`,
 );
