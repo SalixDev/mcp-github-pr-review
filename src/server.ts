@@ -85,6 +85,13 @@ const GetCommitArgs = RepoArgs.extend({
   sha: z.string().min(1),
 });
 
+const ListMyReposArgs = z.object({
+  visibility: z.enum(["all", "public", "private"]).default("all"),
+  affiliation: z.string().default("owner,collaborator,organization_member"),
+  sort: z.enum(["created", "updated", "pushed", "full_name"]).default("pushed"),
+  per_page: z.number().int().min(1).max(100).default(30),
+});
+
 // ---- MCP server -----------------------------------------------------------
 const server = new Server(
   { name: "github-pr-review", version: "0.1.0" },
@@ -183,6 +190,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: { ...repoArgs, sha: { type: "string" } },
         required: ["sha"],
+      },
+    },
+    {
+      name: "list_my_repos",
+      description:
+        "List repos the authenticated user has access to (owned, collaborator, or via org membership). Use to discover what `owner/repo` values are valid before calling other tools.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          visibility: {
+            type: "string",
+            enum: ["all", "public", "private"],
+            default: "all",
+          },
+          affiliation: {
+            type: "string",
+            description:
+              "Comma-separated subset of owner,collaborator,organization_member. Defaults to all three.",
+            default: "owner,collaborator,organization_member",
+          },
+          sort: {
+            type: "string",
+            enum: ["created", "updated", "pushed", "full_name"],
+            default: "pushed",
+          },
+          per_page: { type: "number", default: 30 },
+        },
       },
     },
   ],
@@ -357,6 +391,26 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         })),
         url: data.html_url,
       };
+      return { content: [{ type: "text", text: JSON.stringify(slim, null, 2) }] };
+    }
+
+    if (name === "list_my_repos") {
+      const args = ListMyReposArgs.parse(rawArgs ?? {});
+      const { data } = await octokit.repos.listForAuthenticatedUser({
+        visibility: args.visibility,
+        affiliation: args.affiliation,
+        sort: args.sort,
+        per_page: args.per_page,
+      });
+      const slim = data.map((r) => ({
+        full_name: r.full_name,
+        owner: r.owner.login,
+        repo: r.name,
+        private: r.private,
+        default_branch: r.default_branch,
+        pushed_at: r.pushed_at,
+        url: r.html_url,
+      }));
       return { content: [{ type: "text", text: JSON.stringify(slim, null, 2) }] };
     }
 
