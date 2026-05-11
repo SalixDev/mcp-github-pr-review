@@ -23,12 +23,49 @@ if (!TOKEN) {
 
 const octokit = new Octokit({ auth: TOKEN });
 
-function resolveRepo(args: { owner?: string; repo?: string }): { owner: string; repo: string } {
+// ---- Allowlists -----------------------------------------------------------
+// Even though the token may grant access to many repos, we constrain what
+// this server will touch on the model's behalf. `*` = wildcard.
+function parseAllowlist(raw: string | undefined, fallback: string[]): Set<string> {
+  const source = raw ?? fallback.join(",");
+  return new Set(
+    source
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+const fallbackReadList =
+  DEFAULT_OWNER && DEFAULT_REPO ? [`${DEFAULT_OWNER}/${DEFAULT_REPO}`] : ["*"];
+
+const READ_ALLOW = parseAllowlist(process.env.GITHUB_ALLOWED_REPOS, fallbackReadList);
+const WRITE_ALLOW = parseAllowlist(
+  process.env.GITHUB_WRITE_ALLOWED_REPOS,
+  [...READ_ALLOW],
+);
+
+function isAllowed(owner: string, repo: string, set: Set<string>): boolean {
+  if (set.has("*")) return true;
+  return set.has(`${owner}/${repo}`.toLowerCase());
+}
+
+function resolveRepo(
+  args: { owner?: string; repo?: string },
+  mode: "read" | "write",
+): { owner: string; repo: string } {
   const owner = args.owner ?? DEFAULT_OWNER;
   const repo = args.repo ?? DEFAULT_REPO;
   if (!owner || !repo) {
     throw new Error(
       "owner and repo required (set GITHUB_OWNER/GITHUB_REPO defaults, or pass owner/repo args)",
+    );
+  }
+  const set = mode === "write" ? WRITE_ALLOW : READ_ALLOW;
+  if (!isAllowed(owner, repo, set)) {
+    const envName = mode === "write" ? "GITHUB_WRITE_ALLOWED_REPOS" : "GITHUB_ALLOWED_REPOS";
+    throw new Error(
+      `repo ${owner}/${repo} not in ${envName} allowlist (mode=${mode})`,
     );
   }
   return { owner, repo };
@@ -228,7 +265,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   try {
     if (name === "list_prs") {
       const args = ListPrsArgs.parse(rawArgs ?? {});
-      const { owner, repo } = resolveRepo(args);
+      const { owner, repo } = resolveRepo(args, "read");
       const { data } = await octokit.pulls.list({
         owner,
         repo,
@@ -250,7 +287,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     if (name === "get_pr") {
       const args = GetPrArgs.parse(rawArgs);
-      const { owner, repo } = resolveRepo(args);
+      const { owner, repo } = resolveRepo(args, "read");
       const { data } = await octokit.pulls.get({
         owner,
         repo,
@@ -275,7 +312,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     if (name === "get_pr_diff") {
       const args = GetPrDiffArgs.parse(rawArgs);
-      const { owner, repo } = resolveRepo(args);
+      const { owner, repo } = resolveRepo(args, "read");
       const res = await octokit.pulls.get({
         owner,
         repo,
@@ -289,7 +326,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     if (name === "list_pr_comments") {
       const args = ListPrCommentsArgs.parse(rawArgs);
-      const { owner, repo } = resolveRepo(args);
+      const { owner, repo } = resolveRepo(args, "read");
       const [issueComments, reviewComments] = await Promise.all([
         octokit.issues.listComments({ owner, repo, issue_number: args.number, per_page: 100 }),
         octokit.pulls.listReviewComments({ owner, repo, pull_number: args.number, per_page: 100 }),
@@ -316,7 +353,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     if (name === "add_pr_comment") {
       const args = AddPrCommentArgs.parse(rawArgs);
-      const { owner, repo } = resolveRepo(args);
+      const { owner, repo } = resolveRepo(args, "write");
       const { data } = await octokit.issues.createComment({
         owner,
         repo,
@@ -332,7 +369,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     if (name === "add_pr_review_comment") {
       const args = AddPrReviewCommentArgs.parse(rawArgs);
-      const { owner, repo } = resolveRepo(args);
+      const { owner, repo } = resolveRepo(args, "write");
       // Use the PR head SHA so the comment anchors to the latest commit on the PR.
       const pr = await octokit.pulls.get({ owner, repo, pull_number: args.number });
       const { data } = await octokit.pulls.createReviewComment({
@@ -354,7 +391,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     if (name === "list_commits") {
       const args = ListCommitsArgs.parse(rawArgs);
-      const { owner, repo } = resolveRepo(args);
+      const { owner, repo } = resolveRepo(args, "read");
       const { data } = await octokit.repos.listCommits({
         owner,
         repo,
@@ -374,7 +411,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     if (name === "get_commit") {
       const args = GetCommitArgs.parse(rawArgs);
-      const { owner, repo } = resolveRepo(args);
+      const { owner, repo } = resolveRepo(args, "read");
       const { data } = await octokit.repos.getCommit({ owner, repo, ref: args.sha });
       const slim = {
         sha: data.sha,
@@ -428,5 +465,5 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(
-  `[github-pr-review] connected. default=${DEFAULT_OWNER ?? "(none)"}/${DEFAULT_REPO ?? "(none)"}`,
+  `[github-pr-review] connected. default=${DEFAULT_OWNER ?? "(none)"}/${DEFAULT_REPO ?? "(none)"} read=[${[...READ_ALLOW].join(",")}] write=[${[...WRITE_ALLOW].join(",")}]`,
 );
