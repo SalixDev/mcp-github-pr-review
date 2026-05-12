@@ -4,6 +4,12 @@ A custom **Model Context Protocol** server that gives AI clients (Claude Code, C
 
 Connects via **stdio**. Works with any GitHub repo your token can reach — set defaults via env vars or pass `owner`/`repo` per call.
 
+## Demo
+
+![Claude Code reviewing a PR via the github-pr-review MCP](docs/demo.gif)
+
+Claude reads the diff, reviews it, posts a top-level comment, and tails its own audit log — all via this MCP, no `gh` CLI fallback.
+
 ## Tools
 
 **Read**
