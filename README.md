@@ -8,7 +8,7 @@ Connects via **stdio**. Works with any GitHub repo your token can reach — set 
 
 ![Claude Code reviewing a PR via the github-pr-review MCP](docs/demo.gif)
 
-Claude reads the diff, reviews it, posts a top-level comment, and tails its own audit log — all via this MCP, no `gh` CLI fallback.
+Claude reads the diff, reviews it, posts a top-level comment, and tails its own audit log — all via this MCP.
 
 ## Tools
 
